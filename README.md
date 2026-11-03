@@ -25,6 +25,10 @@ Healthcheck tersedia di `/health` dan akan aktif otomatis saat Railway memberi v
 
 Bot memakai `PORT` yang disediakan Pterodactyl untuk health server. Port ini bukan port WhatsApp; jangan ubah startup command untuk expose port.
 
+## Railway
+
+Pasang Railway Volume pada `/data` agar sesi WhatsApp tersimpan saat redeploy. Set `LOGIN_METHOD=qr` untuk login QR. Jika WhatsApp membatalkan sesi, bot menghapus kredensial yang sudah logout lalu meminta QR baru. Jangan hapus volume; sesi lama berada di `/data/.baileys_auth-server`.
+
 ## Lokal
 
 ```bash

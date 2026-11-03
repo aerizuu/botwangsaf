@@ -353,7 +353,15 @@ async function start(selectedMode) {
         log("WARN", "Koneksi terputus", `kode=${code || "-"} alasan=${reason} aksi=sambung-ulang mode=${mode}`);
         setTimeout(() => start(mode), 2000);
       }
-      else log("ERROR", "Sesi logout", "hapus sesi autentikasi lalu jalankan ulang");
+      else {
+        log("WARN", "Sesi logout", "menghapus kredensial lama dan membuat sesi baru");
+        try {
+          resetAuthSession();
+          setTimeout(() => start(mode), 1000);
+        } catch (error) {
+          log("ERROR", "Gagal menghapus sesi", error.message);
+        }
+      }
     }
   });
   sock.ev.on("messages.upsert", ({ messages: incoming, type }) => {
