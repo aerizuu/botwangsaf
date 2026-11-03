@@ -337,8 +337,9 @@ async function start(selectedMode) {
     if (qr && mode === "pairing") setTimeout(() => void requestPairingCode(), 1500);
     if (qr && mode === "qr") {
       latestQr = qr;
-      log("INFO", "Scan QR berikut dari WhatsApp > Perangkat tertaut:");
-      console.log(qrAsText(qr));
+      const port = Number(process.env.PORT) || 3000;
+      const qrUrl = `${publicBaseUrl(port)}/pairing-qr?token=${qrViewToken}`;
+      log("INFO", "QR WhatsApp siap", qrUrl);
     }
     if (connection === "open") {
       latestQr = null;
