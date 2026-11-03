@@ -23,6 +23,7 @@ module.exports = {
         "quote",
         "grupinfo",
       ],
+      "Teman": ["curhat"],
     };
 
     const categoryNames = Object.keys(commandCategories);

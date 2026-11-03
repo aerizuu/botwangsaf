@@ -21,13 +21,16 @@ const {
 const PREFIXES = [".", "/", "!"];
 // Keep local and Railway credentials completely separate.  A Railway volume can
 // be mounted at /data; locally the credentials stay in the project directory.
-const runtime = process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV || "local";
-const defaultAuthPath = runtime === "local"
-  ? path.join(__dirname, ".baileys_auth-local")
-  : path.join(process.env.WA_DATA_DIR || "/data", ".baileys_auth-server");
+const isRailway = Boolean(process.env.RAILWAY_ENVIRONMENT);
+const runtime = isRailway ? "railway" : "server";
+const defaultAuthPath = path.join(
+  process.env.WA_DATA_DIR || (isRailway ? "/data" : __dirname),
+  ".baileys_auth-server",
+);
 const AUTH_PATH = process.env.WA_AUTH_PATH || defaultAuthPath;
 const state = {
   activeMenfess: new Map(),
+  curhatSessions: new Map(),
   lastMedia: new Map(), config: {
     prefixes: PREFIXES,
     stickerPackname: process.env.STICKER_PACKNAME || "Made with ❤️ by DrxDvs",
@@ -35,6 +38,8 @@ const state = {
   },
 };
 const messages = new Map();
+const processedMessages = new Set();
+const activeMessageKeys = new Set();
 let latestQr = null;
 const qrViewToken = crypto.randomBytes(24).toString("hex");
 let commandCount = 0;
@@ -58,12 +63,8 @@ function htmlEscape(value) {
 
 function qrAsText(qr) {
   let terminalQr = "";
-  qrcode.generate(qr, { small: false }, (value) => { terminalQr = value; });
-  // qrcode-terminal uses terminal background colours. Convert those to solid
-  // blocks so the exact QR matrix is preserved in a browser <pre> element.
+  qrcode.generate(qr, { small: true }, (value) => { terminalQr = value; });
   return terminalQr
-    .replace(/\x1b\[40m  \x1b\[0m/g, "██")
-    .replace(/\x1b\[47m  \x1b\[0m/g, "  ")
     .replace(/\x1b\[[0-9;]*m/g, "");
 }
 
@@ -198,8 +199,12 @@ function makeClient(sock) {
 }
 async function handleMessage(sock, raw) {
   if (!raw.message || raw.key.fromMe || raw.key.remoteJid === "status@broadcast") return;
+  const messageKey = `${raw.key.remoteJid}:${raw.key.id}`;
+  if (processedMessages.has(messageKey) || activeMessageKeys.has(messageKey)) return;
+  processedMessages.add(messageKey);
+  activeMessageKeys.add(messageKey);
   const message = makeMessage(sock, raw);
-  messages.set(`${message.from}:${raw.key.id}`, message);
+  messages.set(messageKey, message);
   if (message.hasMedia) state.lastMedia.set(message.from, message);
   const input = parseCommand(message.body);
   if (!message.fromMe && input) log("INFO", "Command diterima", `command=${input.name} chat=${message.from}`);
@@ -228,6 +233,29 @@ async function handleMessage(sock, raw) {
       }
       return;
     }
+    const sessionKey = `${message.from}:${message.author || ""}`;
+    if (state.curhatSessions.has(sessionKey)) {
+      if (input?.name === "endcurhat") {
+        const command = commands.get("endcurhat");
+        if (command) await command.execute({ message, state, sessionKey });
+        return;
+      }
+      if (input?.name === "curhat") {
+        const command = commands.get("curhat");
+        if (command) await command.execute({ client, message, text: input.text, state, sessionKey, commandName: "curhat" });
+        return;
+      }
+      if (!input) {
+        const command = commands.get("curhat");
+        if (command) await command.execute({ client, message, text: message.body, state, sessionKey });
+        return;
+      }
+      if (input.name === "curhat") {
+        const command = commands.get("curhat");
+        if (command) await command.execute({ client, message, text: input.text, state, sessionKey, commandName: input.name });
+        return;
+      }
+    }
     if (input) {
       commandCount++;
       if (commandCount === VERIFY_EVERY) {
@@ -242,13 +270,14 @@ async function handleMessage(sock, raw) {
       const command = commands.get(input.name);
       if (!command) return message.reply(`Command tidak dikenal. Ketik ${PREFIXES[0]}menu.`);
       return command.execute({ client, message, args: input.args, text: input.text, commandName: input.name, state, commands,
-        helpers: { normalizeNumber, toUserJid, isPrivateUserChat } });
+        sessionKey, helpers: { normalizeNumber, toUserJid, isPrivateUserChat } });
     }
     for (const name of ["menfess"]) {
       const command = commands.get(name);
       if (command?.handleSessionMessage && await command.handleSessionMessage({ client, message, state, helpers: { isPrivateUserChat } })) return;
     }
   } catch (error) { log("ERROR", "Command gagal", error.stack || error.message); await message.reply("Terjadi error saat memproses pesan."); }
+  finally { activeMessageKeys.delete(messageKey); }
 }
 async function start(selectedMode) {
   const mode = selectedMode || await chooseLoginMode();
@@ -287,7 +316,11 @@ async function start(selectedMode) {
   const requestPairingCode = async () => {
     if (pairingRequested || auth.creds.registered || mode !== "pairing") return;
     const phone = normalizeNumber(process.env.PAIRING_PHONE || "");
-    if (!phone) throw new Error("Nomor pairing belum diisi. Set PAIRING_PHONE, contoh: 628xxxxxxxxxx");
+    if (!phone || !/^\d{10,15}$/.test(phone)) {
+      pairingRequested = true;
+      log("ERROR", "Nomor pairing tidak valid", "gunakan kode negara, contoh 628xxxxxxxxxx");
+      return;
+    }
     pairingRequested = true;
     try {
       const code = await sock.requestPairingCode(phone);
@@ -301,15 +334,11 @@ async function start(selectedMode) {
   sock.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
     // Baileys emits `qr` only after the registration handshake is ready. A
     // pairing code requested earlier can be displayed but rejected by WhatsApp.
-    if (qr && mode === "pairing") void requestPairingCode();
+    if (qr && mode === "pairing") setTimeout(() => void requestPairingCode(), 1500);
     if (qr && mode === "qr") {
       latestQr = qr;
-      const port = Number(process.env.PORT) || 3000;
-      const qrUrl = `${publicBaseUrl(port)}/pairing-qr?token=${qrViewToken}`;
-      log("INFO", "QR login siap", qrUrl);
-      if (!process.env.PUBLIC_URL && !process.env.RAILWAY_PUBLIC_DOMAIN && runtime !== "local") {
-        log("WARN", "PUBLIC_URL belum diatur", "tautan QR mungkin tidak bisa dibuka dari luar server");
-      }
+      log("INFO", "Scan QR berikut dari WhatsApp > Perangkat tertaut:");
+      console.log(qrAsText(qr));
     }
     if (connection === "open") {
       latestQr = null;
@@ -326,7 +355,10 @@ async function start(selectedMode) {
       else log("ERROR", "Sesi logout", "hapus sesi autentikasi lalu jalankan ulang");
     }
   });
-  sock.ev.on("messages.upsert", ({ messages: incoming }) => incoming.forEach((raw) => handleMessage(sock, raw)));
+  sock.ev.on("messages.upsert", ({ messages: incoming, type }) => {
+    if (type !== "notify") return;
+    incoming.forEach((raw) => handleMessage(sock, raw));
+  });
 }
 
 function resetAuthSession() {
@@ -352,6 +384,9 @@ async function chooseLoginMode() {
   console.log("3  Reset sesi");
   console.log(`4  Lanjutkan sesi${hasSession ? " (tersedia)" : " (belum ada sesi)"}`);
   const choice = (await ask("Pilih [1-4]: ")).trim();
+  if (choice === "2") {
+    process.env.PAIRING_PHONE = (await ask("Masukkan nomor WhatsApp (contoh 628xxxxxxxxxx): ")).trim();
+  }
   rl.close();
   if (choice === "2") return "pairing";
   if (choice === "3") return "reset";

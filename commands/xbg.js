@@ -1,4 +1,4 @@
-async function getSourceMessage(message, state) {
+async function getSourceMessage(message) {
   if (message.hasMedia) return message;
 
   if (message.hasQuotedMsg) {
@@ -6,7 +6,7 @@ async function getSourceMessage(message, state) {
     if (quoted?.hasMedia) return quoted;
   }
 
-  return state.lastMedia.get(message.from) || null;
+  return null;
 }
 
 module.exports = {
@@ -23,7 +23,7 @@ module.exports = {
 
     let sourceMessage;
     try {
-      sourceMessage = await getSourceMessage(message, state);
+      sourceMessage = await getSourceMessage(message);
     } catch {
       sourceMessage = null;
     }

@@ -234,7 +234,7 @@ module.exports = {
     }
 
     if (!hasMedia && !confessText) {
-      await message.reply("Pesan kosong. Tambahkan teks atau kirim media.");
+      await message.reply("Pesan kosong. Tambahkan teks atau kirim media berupa gambar atau video.");
       return;
     }
 

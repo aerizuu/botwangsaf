@@ -178,10 +178,6 @@ module.exports = {
           log("WARN", "Media reply stiker tidak tersedia", getErrorMessage(error));
         }
       }
-
-      sourceMessage = sourceMessage?.hasMedia
-        ? sourceMessage
-        : state.lastMedia.get(message.from);
     }
 
     if (!sourceMessage?.hasMedia) {
